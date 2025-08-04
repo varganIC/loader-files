@@ -21,4 +21,5 @@ task3 - это задача `process_file`
 
 task4 - это задача `notify_file_uploaded`
 
-![img.png](img.png)
+<img width="1412" height="950" alt="image" src="https://github.com/user-attachments/assets/8864bfa8-baf7-48df-9f12-7b5e5faa379d" />
+
