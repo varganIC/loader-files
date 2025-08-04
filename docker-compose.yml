@@ -1,0 +1,116 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    restart: always
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+
+  sftp:
+    build:
+      context: ./sftp_server
+    ports:
+      - "2222:22"
+    env_file:
+      - .env
+    command: ${SFTP_USER}:${SFTP_PASS}:::${SFTP_DIR}
+
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"    # UI
+    env_file:
+      - .env
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+
+  minio-init:
+    image: minio/mc
+    depends_on:
+      - minio
+    env_file:
+      - .env
+    entrypoint: >
+      /bin/sh -c "
+        sleep 5;
+        mc alias set local http://minio:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD;
+        mc mb -p local/uploads;
+        mc policy set public local/uploads;
+      "
+    restart: "no"
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672" # Web UI
+    env_file:
+      - .env
+
+  migration:
+    build:
+      context: .
+      dockerfile: Dockerfile.migration
+    depends_on:
+      - db
+    env_file:
+      - .env
+    command: >
+      sh -c "
+       echo 'Waiting for Postgres...';
+       until pg_isready -h db -p 5432; do sleep 1; done;
+       echo 'Postgres is ready';
+
+       echo 'Running Alembic migrations...';
+       alembic upgrade head;
+
+       echo 'Running SQL script...';
+       PYTHONPATH=/app python sql_data/data_init.py
+      "
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=4
+    depends_on:
+      - rabbitmq
+      - redis
+      - sftp
+      - migration
+      - minio-init
+
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A app.celery_app beat --loglevel=info
+    depends_on:
+      - rabbitmq
+      - redis
+      - sftp
+      - migration
+      - minio-init
+
+
+volumes:
+  minio_data:
+  postgres_data:
